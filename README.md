@@ -1,2 +1,2 @@
 # Steam Lookup
-https://steamlookup.netlify.app
+https://steamlookup.net

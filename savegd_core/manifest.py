@@ -1,56 +1,53 @@
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-   
+r"""
+manifest.py — Manifest for the save_gd cloud sync system.
+
+Stores which games are enrolled, resolved save paths, a portable
+save_path_template so paths travel correctly between PCs, and per-game sync
+state.
+
+Save paths come from PCGamingWiki's `Game data/saves` wikitext template,
+parsed directly. No Cargo API, no bot password, no login.
+
+Cross-PC path handling
+----------------------
+The absolute save_path is only valid on the PC that resolved it. Every game
+entry also carries save_path_template — a {{p|placeholder}} form like
+{{p|userprofile}}\AppData\LocalLow\Foo. When another PC pulls the manifest,
+the template is re-expanded against *its* environment. Absolute save_path is
+stripped on push and regenerated on pull.
+
+Path resolution order
+---------------------
+    1. save_path_template (portable)   -> expand locally
+    2. Cached save_path                -> trust it, unless its source was
+                                          "userdata" (Steam Cloud staging
+                                          folder, weak signal). Userdata
+                                          caches are re-checked against PCGW
+                                          every time.
+    3. PCGamingWiki                    -> wikitext template, expanded locally
+    4. Steam userdata                  -> last resort, only if it exists
+    5. Unresolved                      -> user picks manually
+
+PCGW section ranking
+--------------------
+PCGW's Game data/saves template can be keyed by OS name (Windows) or by
+platform (Steam, GOG.com, Epic Games Launcher, Microsoft Store, ...). Save
+Sync operates on Steam installs, so Steam beats other storefront sections,
+and Windows (the canonical OS key) beats everything. Lookups try every ranked
+section in order and return the first one that expands to a path that exists
+on disk; if none exist yet, the top-ranked one is returned as a best guess.
+
+Saved targets may be a folder (most games) or a single file (e.g. Sleeping
+Dogs). The rest of the codebase dispatches on this via os.path.isfile /
+os.path.isdir as needed; manifest.py just stores whatever path the resolver
+produced.
+"""
 
 import glob
 import json
 import os
 import re
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -63,8 +60,7 @@ from .paths import manifest_file
 
 STEAMID64_BASE = 76561197960265728
 
-
-                                                                                
+_LOCK = threading.RLock()
 
 def load_manifest() -> dict:
     mf = manifest_file()
@@ -88,10 +84,6 @@ def save_manifest(data: dict):
         json.dump(data, f, indent=2, ensure_ascii=False)
     os.replace(tmp, mf)
 
-
-                                                                                
-
-                                                                      
 _TEMPLATE_ENV_KEYS = [
     ("userprofile",       "USERPROFILE"),
     ("localappdata",      "LOCALAPPDATA"),
@@ -107,19 +99,11 @@ _TEMPLATE_PATTERN = re.compile(r"\{\{[pP]\|([^}]+)\}\}")
 
 
 def _abs_to_template(abs_path: str, steam_path: str = "") -> str:
-\
-\
-\
-\
-\
-\
-       
     if not abs_path:
         return ""
 
     p = abs_path.replace("/", "\\")
 
-                                                                                 
     for key, env in sorted(_TEMPLATE_ENV_KEYS, key=lambda x: -len(x[0])):
         val = os.environ.get(env)
         if not val:
@@ -129,7 +113,6 @@ def _abs_to_template(abs_path: str, steam_path: str = "") -> str:
             tail = p[len(val_norm):].lstrip("\\")
             return f"{{{{p|{key}}}}}\\{tail}" if tail else f"{{{{p|{key}}}}}"
 
-                
     if steam_path:
         sp = os.path.normpath(steam_path).replace("/", "\\").rstrip("\\")
         if p.lower().startswith(sp.lower() + "\\") or p.lower() == sp.lower():
@@ -141,14 +124,8 @@ def _abs_to_template(abs_path: str, steam_path: str = "") -> str:
 
 def _template_to_abs(template: str, appid: int = 0,
                      steam_path: str = "") -> str:
-\
-\
-\
-       
     if not template:
         return ""
-
-                                          
     if not _TEMPLATE_PATTERN.search(template):
         return _expand_path(template)
 
@@ -158,11 +135,7 @@ def _template_to_abs(template: str, appid: int = 0,
 
 
 def _is_portable_template(s: str) -> bool:
-                                                                         
     return bool(s and _TEMPLATE_PATTERN.search(s))
-
-
-                                                                                
 
 def get_game(appid: int):
     return load_manifest()["games"].get(str(appid))
@@ -173,10 +146,6 @@ def is_enrolled(appid: int) -> bool:
 
 
 def enroll_and_resolve(appid: int, name: str, steam_path: str) -> dict:
-\
-\
-\
-       
     enroll_game(appid, name, steam_path=steam_path)
     path, src = resolve_save_path(appid, steam_path)
     if path:
@@ -186,62 +155,61 @@ def enroll_and_resolve(appid: int, name: str, steam_path: str) -> dict:
             save_path=path,
             save_path_source=src,
             save_path_template=tmpl if _is_portable_template(tmpl) else "",
-        )
+        ) # type: ignore
     return get_game(appid)
 
 
 def enroll_game(appid: int, name: str, steam_path: str = "",
                 save_path: str = "", save_path_source: str = "",
                 save_path_template: str = "") -> dict:
-    data = load_manifest()
-    key  = str(appid)
-    existing = data["games"].get(key, {})
+    with _LOCK:
+        data = load_manifest()
+        key  = str(appid)
+        existing = data["games"].get(key, {})
 
-    entry = {
-        "appid":              appid,
-        "name":               name,
-        "save_path":          save_path or existing.get("save_path", ""),
-        "save_path_template": (save_path_template
-                               or existing.get("save_path_template", "")),
-        "save_path_source":   save_path_source or existing.get("save_path_source", ""),
-        "auto_download":      existing.get("auto_download", False),
-        "last_sync":          existing.get("last_sync"),
-        "last_upload":        existing.get("last_upload"),
-        "last_download":      existing.get("last_download"),
-        "enrolled_at":        existing.get("enrolled_at", time.time()),
-        "deployed_dirs":      existing.get("deployed_dirs", []),
-        "proxy_dirs":         existing.get("proxy_dirs", []),
-    }
-    data["games"][key] = entry
-    save_manifest(data)
-    return entry
+        entry = {
+            "appid":              appid,
+            "name":               name,
+            "save_path":          save_path or existing.get("save_path", ""),
+            "save_path_template": (save_path_template
+                                   or existing.get("save_path_template", "")),
+            "save_path_source":   save_path_source or existing.get("save_path_source", ""),
+            "auto_download":      existing.get("auto_download", False),
+            "last_sync":          existing.get("last_sync"),
+            "last_upload":        existing.get("last_upload"),
+            "last_download":      existing.get("last_download"),
+            "enrolled_at":        existing.get("enrolled_at", time.time()),
+            "deployed_dirs":      existing.get("deployed_dirs", []),
+            "proxy_dirs":         existing.get("proxy_dirs", []),
+        }
+        data["games"][key] = entry
+        save_manifest(data)
+        return entry
 
 
 def unenroll_game(appid: int):
-    data = load_manifest()
-    data["games"].pop(str(appid), None)
-    save_manifest(data)
+    with _LOCK:
+        data = load_manifest()
+        data["games"].pop(str(appid), None)
+        save_manifest(data)
 
 
 def update_game(appid: int, **fields):
-    data = load_manifest()
-    key  = str(appid)
-    if key not in data["games"]:
-        return None
-    data["games"][key].update(fields)
-    save_manifest(data)
-    return data["games"][key]
+    with _LOCK:
+        data = load_manifest()
+        key  = str(appid)
+        if key not in data["games"]:
+            return None
+        data["games"][key].update(fields)
+        save_manifest(data)
+        return data["games"][key]
 
 
 def all_games() -> list:
     data = load_manifest()
     return sorted(data["games"].values(), key=lambda g: g.get("name", "").lower())
 
-
-                                                                                
-
 def _parse_vdf(text: str) -> dict:
-                                                                             
     tokens = []
     for m in re.finditer(r'"((?:[^"\\]|\\.)*)"|([{}])', text):
         if m.group(1) is not None:
@@ -275,7 +243,6 @@ def _parse_vdf(text: str) -> dict:
 
 
 def _ci_get(d: dict, key: str, default=None):
-                                                                                
     for k, v in d.items():
         if k.lower() == key.lower():
             return v
@@ -283,7 +250,6 @@ def _ci_get(d: dict, key: str, default=None):
 
 
 def _registry_active_user():
-                                                                                    
     try:
         import winreg
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
@@ -314,7 +280,7 @@ def _loginusers_active_user(steam_path: str):
             ts = int(_ci_get(info, "Timestamp", 0))
         except ValueError:
             ts = 0
-        if ts > best_ts:                                                   
+        if ts > best_ts:
             best_id, best_ts = steamid64, ts
     return int(best_id) - STEAMID64_BASE if best_id else None
 
@@ -332,11 +298,6 @@ def _userdata_active_user(steam_path: str):
 
 
 def get_active_steamid3(steam_path: str):
-\
-\
-\
-\
-       
     uid = _registry_active_user()
     if uid:
         return uid
@@ -356,7 +317,6 @@ def _steam_user_ids(steam_path: str) -> list:
 
 
 def _game_install_dir(appid: int, steam_path: str):
-                                                                    
     if not steam_path:
         return None
     steam_root = Path(steam_path)
@@ -383,11 +343,7 @@ def _game_install_dir(appid: int, steam_path: str):
                 pass
     return None
 
-
-                                                                                
-
 def _pcgw_page_title(appid: int) -> str:
-                                                                          
     class _NoRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, req, fp, code, msg, headers, newurl):
             return None
@@ -412,10 +368,8 @@ def _pcgw_page_title(appid: int) -> str:
 
 
 def _pcgw_wikitext(title: str) -> str:
-    params = {
-        "action": "parse", "page": title,
-        "prop": "wikitext", "format": "json",
-    }
+    params = {"action": "parse", "page": title,
+              "prop": "wikitext", "format": "json"}
     url = PCGW_API + "?" + urllib.parse.urlencode(params)
     req = urllib.request.Request(url, headers=PCGW_HEADERS)
     try:
@@ -427,7 +381,6 @@ def _pcgw_wikitext(title: str) -> str:
 
 
 def _split_template_params(s: str) -> list:
-                                                  
     parts, cur, depth, i = [], "", 0, 0
     while i < len(s):
         if s.startswith("{{", i):
@@ -450,7 +403,6 @@ def _split_template_params(s: str) -> list:
 
 
 def detect_steam_path() -> str:
-                                                                 
     try:
         import winreg
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam") as k:
@@ -458,7 +410,6 @@ def detect_steam_path() -> str:
     except Exception:
         pass
 
-                                
     candidates = [
         r"C:\Program Files (x86)\Steam",
         r"C:\Program Files\Steam",
@@ -472,7 +423,6 @@ def detect_steam_path() -> str:
 
 
 def _extract_templates(wikitext: str, name: str) -> list:
-                                                                           
     out, start = [], 0
     marker = "{{" + name
     while True:
@@ -497,7 +447,6 @@ def _extract_templates(wikitext: str, name: str) -> list:
 
 
 def _pcgw_save_templates(appid: int) -> dict:
-                                                                         
     title = _pcgw_page_title(appid)
     if not title:
         return {}
@@ -515,8 +464,6 @@ def _pcgw_save_templates(appid: int) -> dict:
         results.setdefault(system, []).extend(paths)
     return results
 
-
-                                                                                
 
 _PH_RE = re.compile(r"\{\{[pP]\|([^}]+)\}\}")
 
@@ -537,7 +484,6 @@ def _build_placeholders(appid: int, steam_path: str) -> dict:
 
     uids = _steam_user_ids(steam_path)
     if uids:
-                                                                              
         active = get_active_steamid3(steam_path)
         if active is not None and str(active) in uids:
             uids.remove(str(active))
@@ -552,7 +498,6 @@ def _build_placeholders(appid: int, steam_path: str) -> dict:
 
 
 def _expand_placeholders(path: str, placeholders: dict) -> list:
-                                                                         
     ph_lists = {k: (v if isinstance(v, list) else [v])
                 for k, v in placeholders.items()}
 
@@ -576,9 +521,6 @@ def _expand_placeholders(path: str, placeholders: dict) -> list:
     return [os.path.expandvars(os.path.normpath(c)) for c in candidates]
 
 
-                                                                          
-                                                                       
-                                                    
 _SECTION_PRIORITY = [
     "windows",
     "steam",
@@ -596,19 +538,8 @@ _SECTION_PRIORITY = [
 
 
 def _rank_save_sections(templates: dict) -> list:
-\
-\
-\
-\
-\
-\
-\
-\
-\
-       
     if not templates:
         return []
-
     priority_index = {name: i for i, name in enumerate(_SECTION_PRIORITY)}
 
     def sort_key(item):
@@ -616,7 +547,6 @@ def _rank_save_sections(templates: dict) -> list:
         return priority_index.get(name.strip().lower(), len(_SECTION_PRIORITY))
 
     ordered = sorted(templates.items(), key=sort_key)
-
     ranked = []
     for _name, paths in ordered:
         if paths:
@@ -624,65 +554,10 @@ def _rank_save_sections(templates: dict) -> list:
     return ranked
 
 
-def _pcgw_lookup_save_path(appid: int, steam_path: str = "") -> str:
-                                                                     
-    templates = _pcgw_save_templates(appid)
-    if not templates:
-        return ""
-
-    raw_paths = _rank_save_sections(templates)
-    if not raw_paths:
-        return ""
-
-    placeholders = _build_placeholders(appid, steam_path or "")
-
-    first_expanded = ""
-    for raw in raw_paths:
-        for expanded in _expand_placeholders(raw, placeholders):
-            if not first_expanded:
-                first_expanded = expanded
-            matches = glob.glob(expanded) if "*" in expanded else [expanded]
-            for m in matches:
-                if os.path.exists(m):
-                    return m
-
-    return first_expanded
-
-
-def _pcgw_lookup_template(appid: int, steam_path: str = "") -> str:
-\
-\
-\
-\
-       
-    templates = _pcgw_save_templates(appid)
-    if not templates:
-        return ""
-
-    raw_paths = _rank_save_sections(templates)
-    if not raw_paths:
-        return ""
-
-    placeholders = _build_placeholders(appid, steam_path or "")
-    first_raw = raw_paths[0]
-
-    for raw in raw_paths:
-        if not _is_portable_template(raw):
-            continue
-        for expanded in _expand_placeholders(raw, placeholders):
-            matches = glob.glob(expanded) if "*" in expanded else [expanded]
-            for m in matches:
-                if os.path.exists(m):
-                    return raw
-    return first_raw
-
-
-                                                                                
-
 def _expand_path(p: str) -> str:
     if not p:
         return ""
-    p = p.strip().strip(   ).strip(   )
+    p = p.strip().strip('"').strip("'")
     p = re.sub(r"\s*\((Windows|Linux|macOS|OS X)\)\s*$", "", p, flags=re.I)
     p = os.path.expandvars(p)
     p = os.path.expanduser(p)
@@ -699,7 +574,6 @@ def _steam_userdata_path(steam_path: str, appid: int) -> str:
 
 
 def _is_steam_userdata_path(p: str, steam_path: str) -> bool:
-                                                           
     if not p or not steam_path:
         return False
     try:
@@ -711,36 +585,36 @@ def _is_steam_userdata_path(p: str, steam_path: str) -> bool:
 
 
 def _pcgw_lookup_save_path_and_template(appid: int, steam_path: str) -> tuple:
-\
-\
-\
-\
-       
-    tmpl = _pcgw_lookup_template(appid, steam_path)
-    path = _pcgw_lookup_save_path(appid, steam_path)
-    return path, tmpl
+    templates = _pcgw_save_templates(appid)
+    if not templates:
+        return "", ""
+
+    raw_paths = _rank_save_sections(templates)
+    if not raw_paths:
+        return "", ""
+
+    placeholders = _build_placeholders(appid, steam_path or "")
+
+    first_expanded = ""
+    best_template  = raw_paths[0]
+
+    for raw in raw_paths:
+        expanded_list = _expand_placeholders(raw, placeholders)
+        for expanded in expanded_list:
+            if not first_expanded:
+                first_expanded = expanded
+            if os.path.exists(expanded):
+                return expanded, raw
+        if expanded_list and not _is_portable_template(best_template):
+            best_template = raw
+
+    return first_expanded, best_template
 
 
 def resolve_save_path(appid: int, steam_path: str) -> tuple:
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-\
-       
     entry = get_game(appid) or {}
 
-                                                           
+    # 1. Portable template — resolves correctly on this PC.
     tmpl = entry.get("save_path_template") or ""
     if tmpl:
         local = _template_to_abs(tmpl, appid, steam_path)
@@ -749,36 +623,32 @@ def resolve_save_path(appid: int, steam_path: str) -> tuple:
                 update_game(appid, save_path=local)
             return local, "template"
 
-                                                                            
-                                                                            
-                                                                   
+    # 2. Cached absolute path. Skip the cache if the source was "userdata" —
+    #    that path is often the wrong answer, and PCGW may now have a better
+    #    one.
     cached     = entry.get("save_path") or ""
     cached_src = entry.get("save_path_source", "cache") or "cache"
 
     if cached and cached_src != "userdata":
-                                                                            
-                                                                            
         if _is_steam_userdata_path(cached, steam_path):
             ud = _steam_userdata_path(steam_path, appid)
             if ud:
                 return ud, "userdata"
         return _expand_path(cached), cached_src
 
-                                                                   
+    # 3. PCGW
     pcgw_path, pcgw_tmpl = _pcgw_lookup_save_path_and_template(appid, steam_path)
     if pcgw_path:
         if pcgw_tmpl and _is_portable_template(pcgw_tmpl):
             update_game(appid, save_path_template=pcgw_tmpl)
         return pcgw_path, "pcgw"
 
-                                                                             
-                                                                           
+    # 4. Steam userdata
     ud_path = _steam_userdata_path(steam_path, appid)
     if ud_path:
         return ud_path, "userdata"
 
-                                                                           
-                                                             
+    # 5. Cached userdata last resort
     if cached:
         return _expand_path(cached), cached_src
 
@@ -786,11 +656,70 @@ def resolve_save_path(appid: int, steam_path: str) -> tuple:
 
 
 def set_manual_path(appid: int, path: str, steam_path: str = "") -> dict:
-                                                                            
     tmpl = _abs_to_template(path, steam_path)
     return update_game(
         appid,
         save_path=path,
         save_path_source="manual",
         save_path_template=tmpl if _is_portable_template(tmpl) else "",
-    )
+    ) # type: ignore
+
+
+def refresh_weak_paths(steam_path: str) -> list:
+    changed = []
+
+    with _LOCK:
+        data = load_manifest()
+        games = data.get("games") or {}
+
+        for key, entry in list(games.items()):
+            if not isinstance(entry, dict):
+                continue
+
+            source = entry.get("save_path_source") or ""
+            current = entry.get("save_path") or ""
+
+            # Only refresh entries we don't trust: source == "userdata" or
+            # empty path. Manual paths are never overridden.
+            if source == "manual":
+                continue
+            if source not in ("userdata", "", "cache") and current:
+                # A real pcgw or template-sourced path — leave it.
+                if source in ("pcgw", "template"):
+                    continue
+
+            try:
+                appid = int(entry.get("appid") or key)
+            except (TypeError, ValueError):
+                continue
+
+            try:
+                resolved, new_src = resolve_save_path(appid, steam_path)
+            except Exception:
+                continue
+
+            if not resolved:
+                continue
+
+            if new_src == "userdata" and source == "userdata":
+                # Still userdata, nothing better available.
+                continue
+
+            if resolved == current and new_src == source:
+                continue
+
+            entry["save_path"] = resolved
+            entry["save_path_source"] = new_src
+            try:
+                tmpl = _abs_to_template(resolved, steam_path)
+                if _is_portable_template(tmpl):
+                    entry["save_path_template"] = tmpl
+            except Exception:
+                pass
+
+            changed.append((entry.get("name", f"AppID {appid}"), current, resolved))
+
+        if changed:
+            save_manifest(data)
+
+    return changed

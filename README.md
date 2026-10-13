@@ -5,10 +5,14 @@ https://github.com/Panos-Jr/website-steamlookup - website
 
 Join our discord server: https://discord.gg/8nucvsnWh9
 
+## Requirements
+
 Chrome is required for Selenium, but is not a strict requirement if you're only interested in using it for Steamtools, or OpenSteamTool
 
 If you plan on using the tool to help with SteamTools, or OpenSteamTool, make sure to obtain a Hubcap API key,
 from here: https://hubcapmanifest.com/api-keys/stats
+
+Any libraries listed in `requirements.txt`
 
 ## Background
 **SteamLook/** - main source files for SteamLookup itself

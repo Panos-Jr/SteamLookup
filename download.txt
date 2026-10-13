@@ -1,1 +1,1 @@
-https://github.com/Panos-Jr/SteamLookup/releases/download/v1.9-pre/Steamlookup_setup.exe
+https://github.com/Panos-Jr/SteamLookup/releases/download/v1.9.1/Steamlookup_setup.exe

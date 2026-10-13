@@ -1,5 +1,5 @@
 # Steam Lookup
-https://steamlookup.net
+https://steamlookup.net (may be outdated, if credits aren't adequate)
 
 Join our discord server: https://discord.gg/8nucvsnWh9
 

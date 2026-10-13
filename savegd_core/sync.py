@@ -1,3 +1,43 @@
+"""
+sync.py — Google Drive sync for save_gd.
+
+Handles zipping, hashing, uploading, downloading, history archiving,
+and the games.json manifest replication.
+
+How "which side is newer" is decided
+------------------------------------
+Neither timestamps nor playtime are trustworthy on their own (clocks differ,
+extracting a zip resets file times, playtime is per-PC). Instead each PC
+remembers the state of the last sync, per game:
+
+    base.local   hash of this PC's save files when we last synced
+    base.remote  hash of the Google Drive copy when we last synced
+
+Hashes are of file *contents* (not of the zip, whose bytes change whenever a
+file's timestamp changes). Then, comparing with now:
+
+    local == remote                       -> in sync
+    only the Drive copy changed           -> cloud_newer  (safe to download)
+    only this PC changed                  -> local_newer  (safe to upload)
+    both changed                          -> conflict     (never auto-overwritten)
+
+The very first time a PC sees a game (no base yet) there is nothing to compare
+against, so playtime (when both sides have it) and then timestamps are used as
+a tiebreaker.
+
+Save targets
+------------
+A save target is either a folder (most games) or a single file (some games,
+e.g. Sleeping Dogs). Everything in this module dispatches on the type via
+`_resolve_target`, which returns ("file", path) | ("dir", path) | ("missing",
+path). Zipping a single file produces a one-entry zip; unzipping into a file
+path extracts the single entry back to disk. Hashing is consistent between
+both shapes.
+
+Lazy-imports the Google libraries so this module has no hard dependency
+on google-auth / google-api-python-client at import time.
+"""
+
 import hashlib
 import io
 import json
@@ -8,7 +48,17 @@ from pathlib import Path
 
 from .config import GOOGLE_SCOPES, DRIVE_ROOT_FOLDER
 
+
+# First-contact tiebreak: playtimes closer than this (minutes) count as equal.
 FIRST_CONTACT_PLAYTIME_GAP_MIN = 5
+
+# Single source of truth for the "we're zipping a single file" sentinel name
+# inside the zip. Using a fixed name means content_hash_zip is stable across
+# uploads regardless of the source filename.
+_SINGLE_FILE_ARCNAME = "__save_file__"
+
+
+# ── Lazy google libs ──────────────────────────────────────────────────────────
 
 _google_creds = None
 _google_drive = None
@@ -30,7 +80,23 @@ def _load_google_libs():
     _google_http  = Request
 
 
-                                                                                
+# ── Target resolution ─────────────────────────────────────────────────────────
+
+def _resolve_target(path: str):
+    """
+    Return (kind, resolved_path) where kind is "file", "dir", or "missing".
+    """
+    if not path:
+        return "missing", Path(path) if path else None
+    p = Path(path)
+    if p.is_file():
+        return "file", p
+    if p.is_dir():
+        return "dir", p
+    return "missing", p
+
+
+# ── Zip / hash helpers ────────────────────────────────────────────────────────
 
 def _sha256(blob: bytes) -> str:
     return hashlib.sha256(blob).hexdigest()
@@ -45,6 +111,7 @@ def _file_sha256(path) -> str:
 
 
 def _combine(entries) -> str:
+    """entries: iterable of (relative_posix_path, file_sha256_hex), any order."""
     h = hashlib.sha256()
     for rel, file_hash in sorted(entries, key=lambda e: e[0]):
         h.update(rel.encode("utf-8"))
@@ -54,8 +121,7 @@ def _combine(entries) -> str:
     return h.hexdigest()
 
 
-def content_hash_folder(folder: str) -> str:
-    folder = Path(folder)
+def _content_hash_dir(folder: Path) -> str:
     entries = []
     for root, _dirs, files in os.walk(folder):
         for fname in files:
@@ -68,46 +134,128 @@ def content_hash_folder(folder: str) -> str:
     return _combine(entries)
 
 
+def _content_hash_file(path: Path) -> str:
+    try:
+        return _combine([(_SINGLE_FILE_ARCNAME, _file_sha256(path))])
+    except Exception:
+        return _combine([])
+
+
+def content_hash_folder(folder: str) -> str:
+    """
+    Hash of the save files' relative paths + contents. Accepts either a folder
+    or a single file; for a file, the hash is of the file content under a
+    fixed arcname so it's stable across uploads.
+    """
+    kind, target = _resolve_target(folder)
+    if kind == "dir":
+        return _content_hash_dir(target)
+    if kind == "file":
+        return _content_hash_file(target)
+    return _combine([])
+
+
 def content_hash_zip(blob: bytes) -> str:
+    """Same hash as content_hash_folder, computed from a save.zip's bytes."""
     entries = []
-    with zipfile.ZipFile(io.BytesIO(blob), "r") as zf:
-        for info in zf.infolist():
-            if info.is_dir():
-                continue
-            rel = info.filename.replace("\\", "/")
-            entries.append((rel, _sha256(zf.read(info))))
+    try:
+        with zipfile.ZipFile(io.BytesIO(blob), "r") as zf:
+            for info in zf.infolist():
+                if info.is_dir():
+                    continue
+                rel = info.filename.replace("\\", "/")
+                entries.append((rel, _sha256(zf.read(info))))
+    except Exception:
+        return _combine([])
     return _combine(entries)
 
 
+# ZIP_STORED vs ZIP_DEFLATED: saves are usually binary and mostly incompressible,
+# so deflate burns CPU for ~1-3% size reduction. Stored is much faster to build
+# and to extract, which is what actually bottlenecks the sync round-trip.
+_ZIP_MODE = zipfile.ZIP_STORED
+
+
 def zip_folder(folder: str) -> bytes:
-    folder = Path(folder)
-    if not folder.exists() or not folder.is_dir():
+    kind, target = _resolve_target(folder)
+    if kind == "missing":
         return b""
+
     buf = io.BytesIO()
+
+    if kind == "file":
+        try:
+            with zipfile.ZipFile(buf, "w", _ZIP_MODE) as zf:
+                zf.write(target, _SINGLE_FILE_ARCNAME)
+        except Exception:
+            return b""
+        return buf.getvalue()
+
+    # Directory
     has_files = False
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for root, _dirs, files in os.walk(folder):
-            for fname in files:
-                full = Path(root) / fname
-                rel  = full.relative_to(folder)
-                try:
-                    zf.write(full, str(rel))
-                    has_files = True
-                except Exception:
-                    pass
+    try:
+        with zipfile.ZipFile(buf, "w", _ZIP_MODE) as zf:
+            for root, _dirs, files in os.walk(target):
+                for fname in files:
+                    full = Path(root) / fname
+                    rel  = full.relative_to(target)
+                    try:
+                        zf.write(full, str(rel))
+                        has_files = True
+                    except Exception:
+                        pass
+    except Exception:
+        return b""
     return buf.getvalue() if has_files else b""
 
 
-def unzip_into(blob: bytes, folder: str):
-    folder = Path(folder)
-    folder.mkdir(parents=True, exist_ok=True)
+def unzip_into(blob: bytes, target_path: str):
+    """
+    Extract save.zip's contents into either a folder or a file.
+
+    - If target_path currently resolves to a directory (or doesn't exist and
+      has no extension suggesting a file), extract as a folder tree.
+    - If target_path resolves to a file, extract the single entry back to it.
+      If the zip has multiple entries we extract the first one and warn by
+      returning its name; the caller's UI can surface that.
+    """
+    kind, target = _resolve_target(target_path)
+
     with zipfile.ZipFile(io.BytesIO(blob), "r") as zf:
-        zf.extractall(folder)
+        members = [i for i in zf.infolist() if not i.is_dir()]
+
+        if kind == "file" or (
+            kind == "missing" and target and target.suffix
+            and len(members) == 1
+        ):
+            # Single-file restore. If the zip has more than one entry we still
+            # write the first one, because the destination is a file path and
+            # we can't do anything else sensible.
+            if not members:
+                return
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with zf.open(members[0], "r") as src:
+                data = src.read()
+            target.write_bytes(data)
+            return
+
+        # Folder restore
+        target.mkdir(parents=True, exist_ok=True)
+        zf.extractall(target)
 
 
-def newest_mtime(folder: str) -> float:
+def newest_mtime(target_path: str) -> float:
+    kind, target = _resolve_target(target_path)
+    if kind == "file":
+        try:
+            return os.path.getmtime(target)
+        except Exception:
+            return 0.0
+    if kind != "dir":
+        return 0.0
+
     newest = 0.0
-    for root, _dirs, files in os.walk(folder):
+    for root, _dirs, files in os.walk(target):
         for fname in files:
             try:
                 t = os.path.getmtime(os.path.join(root, fname))
@@ -116,6 +264,9 @@ def newest_mtime(folder: str) -> float:
             except Exception:
                 pass
     return newest
+
+
+# ── Per-PC sync state (what we last synced) ───────────────────────────────────
 
 def _state_file() -> Path:
     from . import paths
@@ -157,6 +308,8 @@ def _record_base(appid, local_hash: str, remote_hash: str):
         pass
 
 
+# ── Drive client ──────────────────────────────────────────────────────────────
+
 class DriveClient:
     def __init__(self, token_path: str):
         _load_google_libs()
@@ -197,9 +350,11 @@ class DriveClient:
         except Exception:
             pass
 
+    # ── Folder / file ops ────────────────────────────────────────────────
 
     def ensure_folder(self, name: str, parent: str = None) -> str:
-        q = f"mimeType='application/vnd.google-apps.folder' and name='{name}' and trashed=false"
+        q = (f"mimeType='application/vnd.google-apps.folder' "
+             f"and name='{name}' and trashed=false")
         if parent:
             q += f" and '{parent}' in parents"
         else:
@@ -240,6 +395,8 @@ class DriveClient:
         tmp = Path(os.environ.get("TEMP", ".")) / f"_sd_up_{os.getpid()}_{name}"
         tmp.write_bytes(blob)
         existing = self.find_file(name, parent)
+        # chunksize=-1 → single-shot upload. MediaFileUpload defaults to a
+        # resumable 100MB-chunk upload which is slower for our small payloads.
         media = MediaFileUpload(str(tmp), mimetype=mime, resumable=False)
         try:
             if existing:
@@ -275,6 +432,8 @@ class DriveClient:
             pass
 
 
+# ── High-level helpers ────────────────────────────────────────────────────────
+
 def _drive_root(client: DriveClient) -> str:
     return client.ensure_folder(DRIVE_ROOT_FOLDER)
 
@@ -308,7 +467,6 @@ def _write_meta(client: DriveClient, game_id: str, meta: dict):
 
 
 def _remote_content_hash(client: DriveClient, game_id: str, meta: dict):
-
     existing = meta.get("content_hash")
     if existing:
         return existing
@@ -352,7 +510,6 @@ def _archive_blob(client: DriveClient, game_id: str, blob: bytes, tag: str = "")
 
 
 def _archive_current(client: DriveClient, game_id: str):
-
     current = client.find_file("save.zip", game_id)
     if not current:
         return
@@ -401,11 +558,11 @@ def _local_playtime(appid: int, steam_path: str):
     except Exception:
         return None
 
+
+# ── Deciding what should happen ───────────────────────────────────────────────
+
 def _decide(appid: int, save_path: str, local_hash: str, remote_hash,
             meta: dict, steam_path: str) -> str:
-
-                                   
-    
     if remote_hash is None:
         return "no_cloud"
     if local_hash == remote_hash:
@@ -422,7 +579,8 @@ def _decide(appid: int, save_path: str, local_hash: str, remote_hash,
         if local_changed:
             return "local_newer"
         return "in_sync"
-    
+
+    # First-contact tiebreak
     local_pt  = _local_playtime(appid, steam_path)
     remote_pt = meta.get("playtime_minutes")
     if (local_pt is not None and remote_pt is not None
@@ -436,12 +594,12 @@ def _decide(appid: int, save_path: str, local_hash: str, remote_hash,
 
 def compare_game(appid: int, save_path: str, client: DriveClient,
                  steam_path: str = "") -> dict:
-    
     info = {"state": "unknown", "remote_time": 0,
             "remote_playtime": None, "message": ""}
 
-    if not save_path or not os.path.isdir(save_path):
-        info["message"] = f"Save folder not found: {save_path}"
+    kind, _target = _resolve_target(save_path)
+    if kind == "missing":
+        info["message"] = f"Save target not found: {save_path}"
         return info
 
     try:
@@ -462,10 +620,10 @@ def compare_game(appid: int, save_path: str, client: DriveClient,
     info["state"] = state
     return info
 
+
 def sync_game(appid: int, save_path: str, client: DriveClient,
               auto_download: bool, steam_path: str = "",
               direction: str = "") -> dict:
-
     result = {
         "action":      "skipped",
         "message":     "",
@@ -477,15 +635,16 @@ def sync_game(appid: int, save_path: str, client: DriveClient,
         "warning":     None,
     }
 
-    if not save_path or not os.path.isdir(save_path):
+    kind, _target = _resolve_target(save_path)
+    if kind == "missing":
         result.update(action="error",
-                      message=f"Save folder not found: {save_path}")
+                      message=f"Save target not found: {save_path}")
         return result
 
     local_blob = zip_folder(save_path)
     if not local_blob:
         result.update(action="error",
-                      message="Save folder is empty, nothing to sync.")
+                      message="Save target is empty, nothing to sync.")
         return result
 
     local_hash = content_hash_folder(save_path)
@@ -528,13 +687,11 @@ def sync_game(appid: int, save_path: str, client: DriveClient,
         do_upload(False, "First upload to Google Drive.")
         return result
 
-                                                                        
     if state == "in_sync":
         _record_base(appid, local_hash, remote_hash)
         result.update(action="skipped", message="Already in sync.")
         return result
 
-                                                                        
     if direction == "upload":
         do_upload(
             True, "Uploaded to Google Drive.",
@@ -551,7 +708,6 @@ def sync_game(appid: int, save_path: str, client: DriveClient,
         )
         return result
 
-                                                                        
     if state == "local_newer":
         do_upload(
             True, "Local newer — uploaded.",
@@ -573,7 +729,7 @@ def sync_game(appid: int, save_path: str, client: DriveClient,
                          "Use Download in Save Sync to pull it manually."),
             )
 
-    else:            
+    else:  # conflict
         result.update(
             action="skipped",
             conflict=True,
@@ -584,7 +740,14 @@ def sync_game(appid: int, save_path: str, client: DriveClient,
 
     return result
 
+
+# ── games.json replication ────────────────────────────────────────────────────
+
 def _manifest_for_push(manifest: dict) -> dict:
+    """
+    Strip PC-specific fields (absolute save_path, deployed/proxy dirs) before
+    uploading. The portable save_path_template travels intact.
+    """
     if not isinstance(manifest, dict):
         return manifest
 
@@ -601,6 +764,11 @@ def _manifest_for_push(manifest: dict) -> dict:
 
 
 def _manifest_after_pull(manifest: dict, steam_path: str) -> dict:
+    """
+    Re-expand save_path_template against this PC's environment. Entries
+    without a template get a fresh resolve attempt so their local path is
+    backfilled (and a template written for future cross-PC travel).
+    """
     try:
         from . import manifest as sg_manifest
     except Exception:
@@ -624,6 +792,28 @@ def _manifest_after_pull(manifest: dict, steam_path: str) -> dict:
                 local = sg_manifest._template_to_abs(tmpl, appid, steam_path)
                 if local:
                     entry["save_path"] = local
+                    continue
+            except Exception:
+                pass
+
+        # No template, or template didn't expand — try a full re-resolve.
+        current = entry.get("save_path") or ""
+        kind, _t = _resolve_target(current)
+        if kind != "missing":
+            continue
+
+        try:
+            resolved, source = sg_manifest.resolve_save_path(appid, steam_path)
+        except Exception:
+            resolved, source = "", ""
+
+        if resolved:
+            entry["save_path"] = resolved
+            entry["save_path_source"] = source or entry.get("save_path_source", "")
+            try:
+                maybe_tmpl = sg_manifest._abs_to_template(resolved, steam_path)
+                if sg_manifest._is_portable_template(maybe_tmpl):
+                    entry["save_path_template"] = maybe_tmpl
             except Exception:
                 pass
         else:
@@ -675,7 +865,6 @@ def merge_games_json(local: dict, remote: dict, steam_path: str = "") -> dict:
         if key not in out["games"]:
             out["games"][key] = dict(entry)
             continue
-                                                 
         l_sync = out["games"][key].get("last_sync") or 0
         r_sync = entry.get("last_sync") or 0
         if r_sync >= l_sync:

@@ -12,7 +12,6 @@ from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox
 
-                                                                                
 _here = Path(__file__).resolve().parent
 _root = _here.parent
 if str(_root) not in sys.path:
@@ -24,12 +23,10 @@ from savegd_core import sync as sg_sync
 from savegd_core import steam_local
 
 
-                                                                                
-BG_FIRST_TICK_MS = 5_000                                                  
-BG_INTERVAL_MS   = 10 * 60 * 1000                           
+BG_FIRST_TICK_MS = 5_000
+BG_INTERVAL_MS   = 10 * 60 * 1000
 
 
-                                                                                
 BG_DARK    = "#0a0d14"
 BG_MID     = "#0f1117"
 BG_CARD    = "#13161f"
@@ -47,10 +44,8 @@ DANGER     = "#ef5350"
 OK         = "#81c784"
 
 
-                                                                                
 def _show_toast(title: str, line1: str, line2: str = "",
                 duration_ms: int = 4000, warn: bool = False, parent=None):
-       
     owns_root = parent is None
     try:
         root = tk.Tk() if owns_root else tk.Toplevel(parent)
@@ -127,9 +122,7 @@ def _show_toast(title: str, line1: str, line2: str = "",
         except Exception: pass
 
 
-                                                                                
 def _humanize_ago(seconds: float) -> str:
-                                                               
     s = int(max(0, seconds))
     if s < 60:
         return f"{s}s"
@@ -140,9 +133,17 @@ def _humanize_ago(seconds: float) -> str:
     return f"{s // 86400}d"
 
 
-                                                                                
+def _is_valid_save_target(path: str) -> bool:
+    if not path:
+        return False
+    try:
+        return os.path.isdir(path) or os.path.isfile(path)
+    except Exception:
+        return False
+
+
+# ── Game exe discovery ────────────────────────────────────────────────────────
 def find_game_exe_candidates(game_folder: Path) -> list:
-       
     if not game_folder.exists():
         return []
 
@@ -184,7 +185,6 @@ def find_game_exe_candidates(game_folder: Path) -> list:
 
 
 def pick_game_exe(parent, game_folder: Path) -> Path | None:
-       
     candidates = find_game_exe_candidates(game_folder)
     if not candidates:
         messagebox.showerror(
@@ -257,7 +257,6 @@ def pick_game_exe(parent, game_folder: Path) -> Path | None:
 
 def deploy_proxy_to_game(game_dir: Path, game_exe: Path, appid: int,
                          game_name: str) -> tuple:
-                                                                                      
     proxy_src = sg_paths.assets_dir() / "version.dll"
     if not proxy_src.exists():
         return False, f"version.dll not found in assets:\n{sg_paths.assets_dir()}"
@@ -298,7 +297,6 @@ def _marker_matches(marker: Path, appid) -> bool:
 
 
 def remove_proxy_from_game(appid, proxy_dirs, deployed_dirs) -> tuple:
-       
     targets = []
     for d in proxy_dirs or []:
         p = Path(d)
@@ -331,7 +329,6 @@ def remove_proxy_from_game(appid, proxy_dirs, deployed_dirs) -> tuple:
 
 
 def find_deployed_proxy_dirs(game: dict) -> list:
-                                                                                 
     found = []
     for raw in (game.get("proxy_dirs") or []):
         try:
@@ -344,8 +341,6 @@ def find_deployed_proxy_dirs(game: dict) -> list:
     if found:
         return found
 
-                                                                            
-                                                                            
     for raw in (game.get("deployed_dirs") or []):
         try:
             base = Path(raw)
@@ -364,7 +359,6 @@ def find_deployed_proxy_dirs(game: dict) -> list:
 
 
 def record_deploy(entry: dict, appid, game_dir: Path, proxy_dir: str):
-                                                                      
     dirs = list(entry.get("deployed_dirs") or [])
     if str(game_dir) not in dirs:
         dirs.append(str(game_dir))
@@ -376,8 +370,6 @@ def record_deploy(entry: dict, appid, game_dir: Path, proxy_dir: str):
     except TypeError:
         sg_manifest.update_game(appid, deployed_dirs=dirs)
 
-
-                                                                                
 class SaveSyncApp(tk.Tk):
     def __init__(self, background: bool = False):
         super().__init__()
@@ -391,18 +383,16 @@ class SaveSyncApp(tk.Tk):
         self.startup_enabled  = sg_paths.is_startup_enabled()
         self.steam_path       = sg_manifest.detect_steam_path()
 
-        self._auth_poll_job       = None
         self._auth_watcher_active = False
         self._auth_watch_start    = 0.0
-        self._drive_status_cache   = {}                                       
+        self._drive_status_cache  = {}
 
-                                
-        self._bg_running       = False
-        self._bg_notified      = {}                                                     
-        self._bg_warned_auth   = False
+        self._bg_running     = False
+        self._bg_notified    = {}
+        self._bg_warned_auth = False
 
-                                                                       
         self._ui_q = queue.Queue()
+        self._weak_refreshing = False
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._build_ui()
@@ -412,16 +402,10 @@ class SaveSyncApp(tk.Tk):
             self.withdraw()
             self.after(BG_FIRST_TICK_MS, self._background_tick)
 
-                                                                         
         self.after(300, self._sync_games_json_on_startup)
-                                                                           
-        self._weak_refreshing = False
         self.after(2500, self._refresh_weak_paths_async)
 
-                                                                                
-
     def _ui(self, fn):
-                                                                         
         self._ui_q.put(fn)
 
     def _pump_ui(self):
@@ -438,8 +422,6 @@ class SaveSyncApp(tk.Tk):
             self.after(100, self._pump_ui)
         except tk.TclError:
             pass
-
-                                                                                
 
     def _build_ui(self):
         hdr = tk.Frame(self, bg=BG_MID, height=60)
@@ -471,7 +453,6 @@ class SaveSyncApp(tk.Tk):
         self._auth_btn = None
         self._refresh_auth_status()
 
-                     
         toggles = tk.Frame(self, bg=BG_MID, height=38)
         toggles.pack(fill="x")
         toggles.pack_propagate(False)
@@ -496,7 +477,6 @@ class SaveSyncApp(tk.Tk):
 
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
 
-                              
         self._list_outer = tk.Frame(self, bg=BG_DARK)
         self._list_outer.pack(fill="both", expand=True, padx=16, pady=12)
 
@@ -521,7 +501,6 @@ class SaveSyncApp(tk.Tk):
 
         self._render_games()
 
-                
         tk.Frame(self, bg=BORDER, height=1).pack(fill="x")
         footer = tk.Frame(self, bg=BG_MID, height=40)
         footer.pack(fill="x")
@@ -550,7 +529,7 @@ class SaveSyncApp(tk.Tk):
         except Exception:
             pass
 
-                                                                                
+    # ── Cards ─────────────────────────────────────────────────────────────
 
     def _render_games(self):
         for w in self._inner.winfo_children():
@@ -571,18 +550,28 @@ class SaveSyncApp(tk.Tk):
             self._make_card(g)
 
     def _make_card(self, game):
+        """
+        Card layout: two-column grid with the info column on the left (fixed
+        weight) and the controls column on the right (fixed width). Using a
+        grid instead of pack stops long game names or extra buttons from
+        pushing the ✕ off the visible area.
+        """
         card = tk.Frame(self._inner, bg=BG_CARD, padx=14, pady=12)
         card.pack(fill="x", pady=(0, 8))
 
-        top = tk.Frame(card, bg=BG_CARD)
-        top.pack(fill="x")
+        card.columnconfigure(0, weight=1)      # info column grows
+        card.columnconfigure(1, weight=0)      # controls column fixed
 
-        left = tk.Frame(top, bg=BG_CARD)
-        left.pack(side="left", fill="x", expand=True)
+        left = tk.Frame(card, bg=BG_CARD)
+        left.grid(row=0, column=0, sticky="nsew")
+
+        right = tk.Frame(card, bg=BG_CARD)
+        right.grid(row=0, column=1, sticky="ne", padx=(12, 0))
 
         tk.Label(left, text=game.get("name", f"AppID {game['appid']}"),
                  font=("Segoe UI", 11, "bold"),
-                 bg=BG_CARD, fg=TEXT_PRI, anchor="w").pack(anchor="w")
+                 bg=BG_CARD, fg=TEXT_PRI, anchor="w",
+                 wraplength=520, justify="left").pack(anchor="w")
 
         appid = game["appid"]
         save_path = game.get("save_path", "")
@@ -591,6 +580,11 @@ class SaveSyncApp(tk.Tk):
         info_parts = [f"AppID {appid}"]
         if save_path:
             info_parts.append(f"Source: {source}")
+            try:
+                if os.path.isfile(save_path):
+                    info_parts.append("single file")
+            except Exception:
+                pass
         tk.Label(left, text="  •  ".join(info_parts),
                  font=("Segoe UI", 8), bg=BG_CARD, fg=TEXT_MUTED,
                  anchor="w").pack(anchor="w", pady=(2, 0))
@@ -598,13 +592,12 @@ class SaveSyncApp(tk.Tk):
         if save_path:
             tk.Label(left, text=f"📁  {save_path}",
                      font=("Segoe UI", 8), bg=BG_CARD, fg=TEXT_SEC,
-                     anchor="w", wraplength=560, justify="left").pack(anchor="w", pady=(2, 0))
+                     anchor="w", wraplength=520, justify="left").pack(anchor="w", pady=(2, 0))
         else:
             tk.Label(left, text="⚠  Save path not set — click 'Set Path'",
                      font=("Segoe UI", 8), bg=BG_CARD, fg=WARN,
                      anchor="w").pack(anchor="w", pady=(2, 0))
 
-                                                           
         playtime = None
         if save_path and self.steam_path:
             try:
@@ -618,8 +611,6 @@ class SaveSyncApp(tk.Tk):
                      font=("Segoe UI", 8), bg=BG_CARD, fg=TEXT_MUTED,
                      anchor="w").pack(anchor="w", pady=(2, 0))
 
-                                                                      
-                                                           
         last_sync = game.get("last_sync")
         if last_sync:
             try:
@@ -637,84 +628,20 @@ class SaveSyncApp(tk.Tk):
             except (TypeError, ValueError):
                 pass
 
-                                                                             
         proxy_dirs_found = find_deployed_proxy_dirs(game)
-        dll_status = tk.Label(
-            left,
-            text=("✓ version.dll found" if proxy_dirs_found else "⚠ version.dll not found"),
-            font=("Segoe UI", 8, "bold"),
-            bg=BG_CARD, fg=(OK if proxy_dirs_found else WARN),
-            anchor="w",
-        )
-        dll_status.pack(anchor="w", pady=(4, 0))
+        tk.Label(left,
+                 text=("✓ version.dll found" if proxy_dirs_found
+                       else "⚠ version.dll not found"),
+                 font=("Segoe UI", 8, "bold"),
+                 bg=BG_CARD, fg=(OK if proxy_dirs_found else WARN),
+                 anchor="w").pack(anchor="w", pady=(4, 0))
 
-        right = tk.Frame(top, bg=BG_CARD)
-        right.pack(side="right", anchor="ne")
-
+        # ── Controls column ──
         status_lbl = tk.Label(right, text="",
                               font=("Segoe UI", 8, "bold"),
                               bg=BG_CARD, fg=TEXT_MUTED, anchor="e")
         status_lbl.pack(anchor="e", pady=(0, 6))
 
-        btn_row = tk.Frame(right, bg=BG_CARD)
-        btn_row.pack(anchor="e")
-
-        def do_upload():
-            self._manual_upload(game)
-
-        def do_download():
-            self._manual_download(game)
-
-        def do_set_path():
-            folder = filedialog.askdirectory(
-                title=f"Select save folder for {game.get('name', appid)}")
-            if not folder:
-                return
-                                                                    
-            sg_manifest.set_manual_path(appid, folder, self.steam_path)
-            self._push_games_json()
-            self._render_games()
-
-        def do_load_dll():
-            self._load_dll_for_game(game)
-
-        def do_remove():
-            if not messagebox.askyesno(
-                "Remove game",
-                f"Remove {game.get('name', appid)} from Save Sync?\n\n"
-                "This also deletes the version.dll hook from the game folder.\n"
-                "Your saves (local and on Google Drive) are NOT touched.",
-                parent=self,
-            ):
-                return
-            self._remove_game(game)
-
-        def mk_btn(text, cmd, primary=False, danger=False):
-            if primary:
-                bg, fg = ACCENT_DIM, ACCENT
-            elif danger:
-                bg, fg = BG_INPUT, DANGER
-            else:
-                bg, fg = BG_INPUT, TEXT_PRI
-            b = tk.Button(btn_row, text=text, command=cmd,
-                          bg=bg, fg=fg,
-                          font=("Segoe UI", 8, "bold" if primary else "normal"),
-                          relief="flat", padx=10, pady=3, cursor="hand2")
-            b.pack(side="left", padx=(0, 4))
-            return b
-
-        if save_path:
-            mk_btn("⬆ Upload",   do_upload, primary=True)
-            mk_btn("⬇ Download", do_download)
-            mk_btn("📁 Path",    do_set_path)
-        else:
-            mk_btn("📁 Set Path", do_set_path, primary=True)
-
-        if not proxy_dirs_found:
-            mk_btn("Load DLL", do_load_dll, primary=True)
-        mk_btn("✕", do_remove, danger=True)
-
-                                                                              
         if save_path:
             auto_var = tk.BooleanVar(value=bool(game.get("auto_download", False)))
 
@@ -737,17 +664,75 @@ class SaveSyncApp(tk.Tk):
                 sg_manifest.update_game(appid, auto_download=want)
                 self._push_games_json()
 
-            tk.Checkbutton(btn_row, text="Auto ⬇", variable=auto_var,
+            tk.Checkbutton(right, text="Auto ⬇", variable=auto_var,
                            command=toggle_auto,
                            bg=BG_CARD, fg=TEXT_SEC, selectcolor=BG_INPUT,
                            activebackground=BG_CARD, activeforeground=ACCENT,
                            font=("Segoe UI", 8), cursor="hand2",
-                           bd=0, highlightthickness=0).pack(side="left", padx=(6, 0))
+                           bd=0, highlightthickness=0).pack(anchor="e", pady=(0, 4))
+
+        btn_row = tk.Frame(right, bg=BG_CARD)
+        btn_row.pack(anchor="e")
+
+        def do_upload():
+            self._manual_upload(game)
+
+        def do_download():
+            self._manual_download(game)
+
+        def do_set_path():
+            folder = filedialog.askdirectory(
+                title=f"Select save folder for {game.get('name', appid)}")
+            if not folder:
+                return
+            sg_manifest.set_manual_path(appid, folder, self.steam_path)
+            self._push_games_json()
+            self._render_games()
+
+        def do_load_dll():
+            self._load_dll_for_game(game)
+
+        def do_remove():
+            if not messagebox.askyesno(
+                "Remove game",
+                f"Remove {game.get('name', appid)} from Save Sync?\n\n"
+                "This also deletes the version.dll hook from the game folder.\n"
+                "Your saves (local and on Google Drive) are NOT touched.",
+                parent=self,
+            ):
+                return
+            self._remove_game(game)
+
+        # Pack right-to-left so ✕ is always the rightmost, then Load DLL,
+        # then others. This guarantees ✕ stays visible even with a long
+        # button strip.
+        def mk_btn(text, cmd, primary=False, danger=False):
+            if primary:
+                bg, fg = ACCENT_DIM, ACCENT
+            elif danger:
+                bg, fg = BG_INPUT, DANGER
+            else:
+                bg, fg = BG_INPUT, TEXT_PRI
+            return tk.Button(btn_row, text=text, command=cmd,
+                             bg=bg, fg=fg,
+                             font=("Segoe UI", 8, "bold" if primary else "normal"),
+                             relief="flat", padx=10, pady=3, cursor="hand2")
+
+        # Build from rightmost to leftmost.
+        mk_btn("✕", do_remove, danger=True).pack(side="right", padx=(4, 0))
+        if not proxy_dirs_found:
+            mk_btn("Load DLL", do_load_dll, primary=True).pack(side="right", padx=(0, 4))
+
+        if save_path:
+            mk_btn("📁 Path", do_set_path).pack(side="right", padx=(0, 4))
+            mk_btn("⬇ Download", do_download).pack(side="right", padx=(0, 4))
+            mk_btn("⬆ Upload", do_upload, primary=True).pack(side="right", padx=(0, 4))
+        else:
+            mk_btn("📁 Set Path", do_set_path, primary=True).pack(side="right", padx=(0, 4))
 
         self._check_drive_status(appid, save_path, status_lbl)
 
     def _load_dll_for_game(self, game):
-                                                                                   
         appid = game["appid"]
         name = game.get("name", f"AppID {appid}")
         folder = filedialog.askdirectory(
@@ -764,21 +749,21 @@ class SaveSyncApp(tk.Tk):
 
         ok, msg = deploy_proxy_to_game(game_dir, game_exe, appid, name)
         if not ok:
-            messagebox.showerror("Save Sync", f"Couldn't load version.dll for {name}:\n\n{msg}", parent=self)
+            messagebox.showerror("Save Sync",
+                                 f"Couldn't load version.dll for {name}:\n\n{msg}",
+                                 parent=self)
             return
 
-                                                                                 
-                                                                                
         record_deploy(game, appid, game_dir, msg)
         self._render_games()
         messagebox.showinfo(
             "Save Sync",
-            f"version.dll loaded for {name}.\n\nInstalled next to: {game_exe.name}\nFolder: {msg}",
+            f"version.dll loaded for {name}.\n\n"
+            f"Installed next to: {game_exe.name}\nFolder: {msg}",
             parent=self,
         )
 
     def _remove_game(self, game):
-                                                                                
         appid = game["appid"]
         name = game.get("name", f"AppID {appid}")
         proxy_dirs = list(game.get("proxy_dirs") or [])
@@ -801,7 +786,7 @@ class SaveSyncApp(tk.Tk):
                 f"Close the game and try again.\n\n{detail}",
                 parent=self,
             )
-            return                                       
+            return
 
         sg_manifest.unenroll_game(appid)
         self._drive_status_cache.pop(appid, None)
@@ -816,7 +801,7 @@ class SaveSyncApp(tk.Tk):
         )
 
     def _check_drive_status(self, appid: int, save_path: str, status_lbl):
-        if not save_path or not sg_paths.token_file().exists():
+        if not _is_valid_save_target(save_path) or not sg_paths.token_file().exists():
             return
 
         now = time.time()
@@ -840,7 +825,6 @@ class SaveSyncApp(tk.Tk):
         threading.Thread(target=worker, daemon=True).start()
 
     def _apply_cloud_badge(self, status_lbl, info):
-                                                                                      
         try:
             if not status_lbl.winfo_exists():
                 return
@@ -861,13 +845,13 @@ class SaveSyncApp(tk.Tk):
         else:
             status_lbl.configure(text="", fg=TEXT_MUTED)
 
-                                                                                
+    # ── Manual sync ───────────────────────────────────────────────────────
 
     def _manual_upload(self, game):
         appid = game["appid"]
         name = game.get("name", f"AppID {appid}")
         save_path = game.get("save_path")
-        if not save_path or not os.path.isdir(save_path):
+        if not _is_valid_save_target(save_path):
             messagebox.showerror("Save Sync", "Save path is not set.", parent=self)
             return
 
@@ -900,7 +884,7 @@ class SaveSyncApp(tk.Tk):
         appid = game["appid"]
         name = game.get("name", f"AppID {appid}")
         save_path = game.get("save_path")
-        if not save_path or not os.path.isdir(save_path):
+        if not _is_valid_save_target(save_path):
             messagebox.showerror("Save Sync", "Save path is not set.", parent=self)
             return
 
@@ -941,8 +925,6 @@ class SaveSyncApp(tk.Tk):
         msg = result.get("message", "")
         warn_text = result.get("warning") or ""
 
-                                                                           
-                                                
         if appid is not None and action in ("uploaded", "downloaded"):
             now = time.time()
             fields = {"last_sync": now}
@@ -974,10 +956,7 @@ class SaveSyncApp(tk.Tk):
         except tk.TclError:
             pass
 
-                                                                                
-
     def _open_add_folder(self):
-                                                                                     
         folder = filedialog.askdirectory(
             title="Select the game's install folder (contains game.exe)")
         if not folder:
@@ -1006,7 +985,7 @@ class SaveSyncApp(tk.Tk):
 
         self._push_games_json()
         self._render_games()
-        self.after(15000, self._refresh_weak_paths_async)                         
+        self.after(15000, self._refresh_weak_paths_async)
 
         path = entry.get("save_path") or ""
         messagebox.showinfo(
@@ -1018,7 +997,6 @@ class SaveSyncApp(tk.Tk):
         )
 
     def _ask_appid(self, guess_name: str) -> int | None:
-                                                                    
         win = tk.Toplevel(self)
         win.title("Enter Steam AppID")
         win.geometry("420x180")
@@ -1062,7 +1040,6 @@ class SaveSyncApp(tk.Tk):
         return result["appid"]
 
     def _open_library_scan(self):
-                                                                           
         from savegd_core import library as sg_library
 
         try:
@@ -1181,7 +1158,7 @@ class SaveSyncApp(tk.Tk):
                     failed.append(f"{name}: {e}")
 
             self._push_games_json()
-            self.after(15000, self._refresh_weak_paths_async)                         
+            self.after(15000, self._refresh_weak_paths_async)
 
             summary = f"Added {added} games."
             if needs_path:
@@ -1212,8 +1189,6 @@ class SaveSyncApp(tk.Tk):
                   bg=BG_INPUT, fg=TEXT_SEC, font=("Segoe UI", 9),
                   relief="flat", padx=14, pady=5,
                   cursor="hand2").pack(side="right")
-
-                                                                                
 
     def _refresh_auth_status(self):
         try:
@@ -1272,8 +1247,6 @@ class SaveSyncApp(tk.Tk):
         self._sync_games_json_on_startup()
         self._render_games()
 
-                                                                                
-
     def _toggle_silence(self):
         self.silence_warnings = self._silence_var.get()
         sg_paths.save_silence_warnings(self.silence_warnings)
@@ -1294,24 +1267,22 @@ class SaveSyncApp(tk.Tk):
                 self._startup_var.set(True)
                 return
 
-                                                                                
+    # ── games.json replication ────────────────────────────────────────────
 
     def _pull_and_merge_games_json(self, client) -> int:
-           
         remote = sg_sync.pull_games_json(client)
         if not remote or not remote.get("games"):
             return 0
 
-        with sg_manifest._LOCK:
-            local = sg_manifest.load_manifest()
-            before = set(str(k) for k in (local.get("games") or {}).keys())
-            merged = sg_sync.merge_games_json(local, remote, self.steam_path)
-            sg_manifest.save_manifest(merged)
-            after = set(str(k) for k in (merged.get("games") or {}).keys())
+        # Manifest module owns the lock; no need to reach into it here.
+        local = sg_manifest.load_manifest()
+        before = set(str(k) for k in (local.get("games") or {}).keys())
+        merged = sg_sync.merge_games_json(local, remote, self.steam_path)
+        sg_manifest.save_manifest(merged)
+        after = set(str(k) for k in (merged.get("games") or {}).keys())
         return len(after - before)
 
     def _sync_games_json_on_startup(self):
-                                                                                    
         if not sg_paths.token_file().exists():
             return
 
@@ -1336,7 +1307,6 @@ class SaveSyncApp(tk.Tk):
         threading.Thread(target=worker, daemon=True).start()
 
     def _push_games_json(self):
-                                                                         
         if not sg_paths.token_file().exists():
             return
         data = sg_manifest.load_manifest()
@@ -1352,15 +1322,12 @@ class SaveSyncApp(tk.Tk):
 
         threading.Thread(target=worker, daemon=True).start()
 
-                                                                                
     def _refresh_weak_paths_async(self):
-                                                                                  
         if self._weak_refreshing:
             return
         self._weak_refreshing = True
 
         def worker():
-            changed = []
             try:
                 changed = sg_manifest.refresh_weak_paths(self.steam_path)
             except Exception:
@@ -1381,9 +1348,8 @@ class SaveSyncApp(tk.Tk):
             shown += f" +{len(changed) - 3} more"
         _show_toast("Save Sync", "Save path corrected from PCGamingWiki",
                     shown, duration_ms=6000, parent=self)
-        
+
     def _background_tick(self):
-           
         try:
             self.after(BG_INTERVAL_MS, self._background_tick)
         except tk.TclError:
@@ -1414,7 +1380,6 @@ class SaveSyncApp(tk.Tk):
                 if not client.authenticate():
                     return
 
-                                                                                    
                 try:
                     self._pull_and_merge_games_json(client)
                 except Exception:
@@ -1423,14 +1388,13 @@ class SaveSyncApp(tk.Tk):
                 for g in sg_manifest.all_games():
                     appid = g.get("appid")
                     save_path = g.get("save_path")
-                    if not appid or not save_path or not os.path.isdir(save_path):
+                    if not appid or not _is_valid_save_target(save_path):
                         continue
                     try:
                         info = sg_sync.compare_game(
                             appid, save_path, client, self.steam_path)
                         state = info.get("state")
 
-                                                                      
                         if state == "cloud_newer" and g.get("auto_download"):
                             try:
                                 res = sg_sync.sync_game(
@@ -1448,7 +1412,6 @@ class SaveSyncApp(tk.Tk):
                                     )
                                     name = g.get("name", f"AppID {appid}")
                                     auto_downloaded.append(name)
-                                                                       
                                     self._bg_notified[appid] = (
                                         state, info.get("remote_time"))
                                     continue
@@ -1457,7 +1420,6 @@ class SaveSyncApp(tk.Tk):
 
                         if state not in ("cloud_newer", "conflict"):
                             continue
-                                                                 
                         key = (state, info.get("remote_time"))
                         if self._bg_notified.get(appid) == key:
                             continue
@@ -1472,7 +1434,6 @@ class SaveSyncApp(tk.Tk):
             finally:
                 self._bg_running = False
 
-                                                                      
             if auto_downloaded:
                 try:
                     self._push_games_json()
@@ -1509,17 +1470,12 @@ class SaveSyncApp(tk.Tk):
 
         threading.Thread(target=worker, daemon=True).start()
 
-
-                                                                                
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Save Sync GUI")
     parser.add_argument("--background", action="store_true",
                         help="Start hidden and check for newer cloud saves periodically")
     args = parser.parse_args(argv)
 
-                                                                              
-                                                                              
-                                 
     if args.background and not sg_paths.acquire_background_lock():
         return
 

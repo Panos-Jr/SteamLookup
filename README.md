@@ -4,8 +4,9 @@ https://steamlookup.net (may be outdated, if credits aren't adequate)
 https://github.com/Panos-Jr/website-steamlookup
 
 
-SteamLook - main source files for SteamLookup itself
-save_gd, and save_gd_core - source files for save_gd (save 'google drive'), most of them are contained in the former, with the latter having the GUI code and extra
+**SteamLook/** - main source files for SteamLookup itself
+
+**save_gd/**, and **save_gd_core/** - source files for save_gd (save 'google drive'), most of them are contained in the former, with the latter having the GUI code and extra
 
 
 

@@ -1,0 +1,36 @@
+LIBRARY "dwmapi.dll"
+EXPORTS
+	DllCanUnloadNow=DllCanUnloadNowFwd @111
+	DllGetClassObject=DllGetClassObjectFwd @115
+	DwmAttachMilContent=DwmAttachMilContentFwd @116
+	DwmDefWindowProc=DwmDefWindowProcFwd @117
+	DwmDetachMilContent=DwmDetachMilContentFwd @118
+	DwmEnableBlurBehindWindow=DwmEnableBlurBehindWindowFwd @119
+	DwmEnableComposition=DwmEnableCompositionFwd @102
+	DwmEnableMMCSS=DwmEnableMMCSSFwd @120
+	DwmExtendFrameIntoClientArea=DwmExtendFrameIntoClientAreaFwd @121
+	DwmFlush=DwmFlushFwd @122
+	DwmGetColorizationColor=DwmGetColorizationColorFwd @123
+	DwmGetCompositionTimingInfo=DwmGetCompositionTimingInfoFwd @125
+	DwmGetGraphicsStreamClient=DwmGetGraphicsStreamClientFwd @126
+	DwmGetGraphicsStreamTransformHint=DwmGetGraphicsStreamTransformHintFwd @129
+	DwmGetTransportAttributes=DwmGetTransportAttributesFwd @130
+	DwmGetUnmetTabRequirements=DwmGetUnmetTabRequirementsFwd @133
+	DwmGetWindowAttribute=DwmGetWindowAttributeFwd @134
+	DwmInvalidateIconicBitmaps=DwmInvalidateIconicBitmapsFwd @146
+	DwmIsCompositionEnabled=DwmIsCompositionEnabledFwd @149
+	DwmModifyPreviousDxFrameDuration=DwmModifyPreviousDxFrameDurationFwd @199
+	DwmQueryThumbnailSourceSize=DwmQueryThumbnailSourceSizeFwd @200
+	DwmRegisterThumbnail=DwmRegisterThumbnailFwd @201
+	DwmRenderGesture=DwmRenderGestureFwd @202
+	DwmSetDxFrameDuration=DwmSetDxFrameDurationFwd @203
+	DwmSetIconicLivePreviewBitmap=DwmSetIconicLivePreviewBitmapFwd @204
+	DwmSetIconicThumbnail=DwmSetIconicThumbnailFwd @205
+	DwmSetPresentParameters=DwmSetPresentParametersFwd @206
+	DwmSetWindowAttribute=DwmSetWindowAttributeFwd @207
+	DwmShowContact=DwmShowContactFwd @208
+	DwmTetherContact=DwmTetherContactFwd @209
+	DwmTetherTextContact=DwmTetherTextContactFwd @156
+	DwmTransitionOwnedWindow=DwmTransitionOwnedWindowFwd @210
+	DwmUnregisterThumbnail=DwmUnregisterThumbnailFwd @211
+	DwmUpdateThumbnailProperties=DwmUpdateThumbnailPropertiesFwd @212

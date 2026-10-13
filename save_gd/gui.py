@@ -50,12 +50,6 @@ OK         = "#81c784"
                                                                                 
 def _show_toast(title: str, line1: str, line2: str = "",
                 duration_ms: int = 4000, warn: bool = False, parent=None):
-\
-\
-\
-\
-\
-\
        
     owns_root = parent is None
     try:
@@ -148,15 +142,6 @@ def _humanize_ago(seconds: float) -> str:
 
                                                                                 
 def find_game_exe_candidates(game_folder: Path) -> list:
-\
-\
-\
-\
-\
-\
-\
-\
-\
        
     if not game_folder.exists():
         return []
@@ -199,9 +184,6 @@ def find_game_exe_candidates(game_folder: Path) -> list:
 
 
 def pick_game_exe(parent, game_folder: Path) -> Path | None:
-\
-\
-\
        
     candidates = find_game_exe_candidates(game_folder)
     if not candidates:
@@ -316,14 +298,6 @@ def _marker_matches(marker: Path, appid) -> bool:
 
 
 def remove_proxy_from_game(appid, proxy_dirs, deployed_dirs) -> tuple:
-\
-\
-\
-\
-\
-\
-\
-\
        
     targets = []
     for d in proxy_dirs or []:
@@ -1323,9 +1297,6 @@ class SaveSyncApp(tk.Tk):
                                                                                 
 
     def _pull_and_merge_games_json(self, client) -> int:
-\
-\
-\
            
         remote = sg_sync.pull_games_json(client)
         if not remote or not remote.get("games"):
@@ -1412,15 +1383,6 @@ class SaveSyncApp(tk.Tk):
                     shown, duration_ms=6000, parent=self)
         
     def _background_tick(self):
-\
-\
-\
-\
-\
-\
-\
-\
-\
            
         try:
             self.after(BG_INTERVAL_MS, self._background_tick)

@@ -28,6 +28,10 @@ def _resolve_assets_dir() -> Path:
     os.path.dirname(sys.executable) if getattr(sys, "frozen", False)
     else os.path.dirname(os.path.abspath(__file__))
 )
+    if (Path(_BASE_DIR).parent / "steam_lookup_assets").is_dir():
+        _BASE_DIR = Path(_BASE_DIR).parent
+        return Path(_BASE_DIR) / "steam_lookup_assets"
+
     if (Path(_BASE_DIR) / "steam_lookup_assets").is_dir():
         return Path(_BASE_DIR) / "steam_lookup_assets"
     return Path(_BASE_DIR)

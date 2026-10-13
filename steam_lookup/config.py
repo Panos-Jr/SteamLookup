@@ -11,11 +11,16 @@ STEAM_CONFIG_FILE  = os.path.join(os.path.expanduser("~"), ".steam_lookup_steam_
 _REMINDER_FILE     = os.path.join(os.path.expanduser("~"), ".steam_lookup_reminder.json")
 
                                                                           
-_BASE_DIR = (
+_BASE_DIR = Path(
     os.path.dirname(sys.executable) if getattr(sys, "frozen", False)
     else os.path.dirname(os.path.abspath(__file__))
 )
-ASSETS_DIR = os.path.join(_BASE_DIR, "steam_lookup_assets")
+
+if (_BASE_DIR.parent / "steam_lookup_assets").is_dir():
+    _BASE_DIR = _BASE_DIR.parent
+
+
+ASSETS_DIR = str(_BASE_DIR / "steam_lookup_assets")
                                                                                 
 BG_DARK    = "#0a0d14"
 BG_MID     = "#0f1117"

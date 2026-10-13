@@ -1,7 +1,8 @@
 # Steam Lookup
 https://steamlookup.net (may be outdated, if credits aren't adequate)
 
-https://github.com/Panos-Jr/website-steamlookup
+https://github.com/Panos-Jr/website-steamlookup - website
+
 
 
 **SteamLook/** - main source files for SteamLookup itself

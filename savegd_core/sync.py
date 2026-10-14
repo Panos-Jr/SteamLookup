@@ -63,6 +63,8 @@ def content_hash_folder(folder: str) -> str:
     entries = []
     for root, _dirs, files in os.walk(folder):
         for fname in files:
+            if fname == _ENTRIES_JSON:
+                continue
             full = Path(root) / fname
             try:
                 rel = full.relative_to(folder).as_posix()
@@ -80,6 +82,8 @@ def content_hash_zip(blob: bytes) -> str:
                 if info.is_dir():
                     continue
                 rel = info.filename.replace("\\", "/")
+                if rel == _ENTRIES_JSON:
+                    continue
                 entries.append((rel, _sha256(zf.read(info))))
     except Exception:
         return _combine([])
@@ -87,6 +91,21 @@ def content_hash_zip(blob: bytes) -> str:
 
 
 _ZIP_MODE = zipfile.ZIP_STORED
+
+
+def _newest_mtime(folder: Path) -> float:
+    newest = 0.0
+    for root, _dirs, files in os.walk(folder):
+        for fname in files:
+            if fname == _ENTRIES_JSON:
+                continue
+            try:
+                t = os.path.getmtime(os.path.join(root, fname))
+                if t > newest:
+                    newest = t
+            except Exception:
+                pass
+    return newest
 
 
 def _expand_game_paths(game: dict, steam_path: str) -> list:
@@ -559,7 +578,8 @@ def _local_playtime(appid: int, steam_path: str):
 
 
 def _decide(appid: int, local_hash: str, remote_hash,
-            meta: dict, steam_path: str) -> str:
+            meta: dict, steam_path: str,
+            local_mtime: float = 0.0) -> str:
     if remote_hash is None:
         return "no_cloud"
     if local_hash == remote_hash:
@@ -577,14 +597,27 @@ def _decide(appid: int, local_hash: str, remote_hash,
             return "local_newer"
         return "in_sync"
 
+    # First contact: prefer playtime, then upload time vs local mtime,
+    # then fall back to cloud (a fresh install with cloud data is far
+    # more likely to want a download than an upload that clobbers it).
     local_pt  = _local_playtime(appid, steam_path)
     remote_pt = meta.get("playtime_minutes")
-    if (local_pt is not None and remote_pt is not None
-            and abs(local_pt - remote_pt) > FIRST_CONTACT_PLAYTIME_GAP_MIN):
-        return "cloud_newer" if remote_pt > local_pt else "local_newer"
+
+    if local_pt is not None and remote_pt is not None:
+        diff = remote_pt - local_pt
+        if diff > FIRST_CONTACT_PLAYTIME_GAP_MIN:
+            return "cloud_newer"
+        if diff < -FIRST_CONTACT_PLAYTIME_GAP_MIN:
+            return "local_newer"
 
     remote_time = meta.get("uploaded_at", 0) or 0
-    return "local_newer" if remote_time else "no_cloud"
+    if remote_time and local_mtime:
+        return "local_newer" if local_mtime > remote_time else "cloud_newer"
+
+    if remote_time:
+        return "cloud_newer"
+
+    return "no_cloud"
 
 
 def compare_game(appid: int, game: dict, client: DriveClient,
@@ -601,11 +634,13 @@ def compare_game(appid: int, game: dict, client: DriveClient,
         info["message"] = "No local save paths found."
         return info
 
+    local_mtime = 0.0
     try:
         with tempfile.TemporaryDirectory(prefix="sd_hash_") as tmp:
             stage_dir = Path(tmp)
             _stage_entries(present, stage_dir)
             local_hash = content_hash_folder(stage_dir)
+            local_mtime = _newest_mtime(stage_dir)
     except Exception as e:
         info["message"] = f"Staging failed: {e}"
         return info
@@ -621,7 +656,8 @@ def compare_game(appid: int, game: dict, client: DriveClient,
     info["remote_time"]     = meta.get("uploaded_at", 0) or 0
     info["remote_playtime"] = meta.get("playtime_minutes")
 
-    state = _decide(appid, local_hash, remote_hash, meta, steam_path)
+    state = _decide(appid, local_hash, remote_hash, meta, steam_path,
+                    local_mtime=local_mtime)
     if state == "in_sync" and remote_hash is not None:
         _record_base(appid, local_hash, remote_hash)
     info["state"] = state
@@ -650,12 +686,17 @@ def sync_game(appid: int, game: dict, client: DriveClient,
                       message="No local save paths found.")
         return result
 
+    stage_tmp = None
     try:
         stage_tmp = tempfile.mkdtemp(prefix="sd_stage_")
         stage_dir = Path(stage_tmp)
         _stage_entries(present, stage_dir)
         local_blob = _zip_dir(stage_dir)
+        local_mtime = _newest_mtime(stage_dir)
     except Exception as e:
+        if stage_tmp:
+            try: shutil.rmtree(stage_tmp, ignore_errors=True)
+            except Exception: pass
         result.update(action="error", message=f"Staging failed: {e}")
         return result
 
@@ -679,7 +720,8 @@ def sync_game(appid: int, game: dict, client: DriveClient,
 
         result["remote_hash"] = remote_hash
 
-        state = _decide(appid, local_hash, remote_hash, meta, steam_path)
+        state = _decide(appid, local_hash, remote_hash, meta, steam_path,
+                        local_mtime=local_mtime)
         result["state"] = state
 
         if missing:

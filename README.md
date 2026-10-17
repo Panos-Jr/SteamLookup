@@ -1,5 +1,5 @@
 # Steam Lookup
-https://steamlookup.net (may be outdated, if credits aren't adequate)
+https://steamlookup.net
 
 https://github.com/Panos-Jr/website-steamlookup - website
 
